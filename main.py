@@ -11,7 +11,7 @@ from vertexai.generative_models import GenerativeModel
 
 # ---- Config ----
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
-REGION = os.environ.get("GCP_REGION", "us-east1")
+REGION = os.environ.get("GCP_REGION", "us-central1")
 TIMEZONE = "America/New_York"
 DEFAULT_USER_ID = "default"
 
@@ -39,7 +39,7 @@ def safe_parse_json(text: str) -> dict:
 
 def call_gemini_json(prompt: str) -> dict:
     vertexai.init(project=PROJECT_ID, location=REGION)
-    model = GenerativeModel("gemini-1.5-flash")
+   model = GenerativeModel("gemini-1.5-flash-002")
     resp = model.generate_content(prompt)
     return safe_parse_json(resp.text)
 
