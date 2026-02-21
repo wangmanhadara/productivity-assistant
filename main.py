@@ -17,7 +17,7 @@ DEFAULT_USER_ID = "default"
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-db = firestore.Client()
+db = firestore.Client(database="productivitydatabase")
 
 # ---- Helpers ----
 def now_utc_iso() -> str:
