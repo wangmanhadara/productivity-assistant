@@ -39,7 +39,7 @@ def safe_parse_json(text: str) -> dict:
 
 def call_gemini_json(prompt: str) -> dict:
     vertexai.init(project=PROJECT_ID, location=REGION)
-   model = GenerativeModel("gemini-1.5-flash-002")
+    model = GenerativeModel("gemini-1.5-flash-002")
     resp = model.generate_content(prompt)
     return safe_parse_json(resp.text)
 
