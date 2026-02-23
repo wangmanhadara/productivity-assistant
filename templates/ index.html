@@ -1,435 +1,162 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Cloud Productivity AI Assistant</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cloud Productivity Assistant</title>
   <style>
-    :root{
-      --bg: #0b1220;
-      --card: rgba(255,255,255,0.06);
-      --card2: rgba(255,255,255,0.08);
-      --text: rgba(255,255,255,0.92);
-      --muted: rgba(255,255,255,0.65);
-      --border: rgba(255,255,255,0.12);
-      --shadow: 0 18px 50px rgba(0,0,0,0.45);
-      --radius: 18px;
-    }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f7f7fb;color:#111827;margin:0;}
+    .container{max-width:1100px;margin:40px auto;padding:0 16px;}
+    h1{font-size:22px;margin:0 0 6px 0;}
+    .sub{margin:0;color:#6b7280;font-size:14px;line-height:1.4;max-width:820px;}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;margin-top:14px;}
+    @media (max-width:980px){.grid{grid-template-columns:1fr;}}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 8px 24px rgba(17,24,39,0.06);}
+    .title{font-size:13px;font-weight:800;color:#374151;margin:0 0 10px 0;}
+    textarea{width:100%;min-height:260px;padding:12px;border-radius:10px;border:1px solid #d1d5db;font-size:14px;line-height:1.45;resize:vertical;outline:none;}
+    textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,0.15);}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;}
+    button{padding:10px 12px;border-radius:10px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:800;font-size:13px;}
+    button.primary{background:#2563eb;color:#fff;border-color:#2563eb;}
+    button.warn{background:#f59e0b;color:#111827;border-color:#f59e0b;}
+    button:hover{filter:brightness(0.98);}
+    .hint{margin-top:10px;color:#6b7280;font-size:12px;line-height:1.45;}
+    pre{margin:0;padding:12px;border-radius:10px;border:1px solid #e5e7eb;background:#0b1220;color:#e5e7eb;overflow-x:auto;white-space:pre-wrap;word-break:break-word;line-height:1.45;font-size:13px;min-height:260px;}
+    .row{margin-top:14px;}
 
-    * { box-sizing: border-box; }
-    body{
-      margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-      color: var(--text);
-      background: radial-gradient(1200px 600px at 20% 10%, rgba(94,234,212,0.16), transparent 55%),
-                  radial-gradient(900px 500px at 90% 15%, rgba(99,102,241,0.18), transparent 55%),
-                  radial-gradient(800px 520px at 55% 90%, rgba(244,63,94,0.10), transparent 55%),
-                  var(--bg);
-      min-height: 100vh;
-    }
+    .day{border:1px solid #e5e7eb;border-radius:12px;background:#fff;box-shadow:0 6px 18px rgba(17,24,39,0.05);overflow:hidden;}
+    .day-hd{padding:12px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;gap:12px;align-items:center;}
+    .day-hd b{font-size:14px;}
+    .date{color:#6b7280;font-size:12px;}
+    .blocks{padding:12px 14px;display:grid;gap:10px;}
 
-    .wrap{
-      max-width: 1050px;
-      margin: 0 auto;
-      padding: 28px 18px 48px;
-    }
+    .block{border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#f8fafc;}
+    .block .t{font-weight:800;}
+    .block .m{color:#6b7280;font-size:12px;margin-top:3px;line-height:1.35;}
 
-    header{
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 18px;
-    }
-
-    .title{
-      display: grid;
-      gap: 6px;
-    }
-    .title h1{
-      margin: 0;
-      font-size: 28px;
-      line-height: 1.2;
-      letter-spacing: 0.2px;
-    }
-    .title p{
-      margin: 0;
-      color: var(--muted);
-      max-width: 720px;
-      font-size: 14px;
-      line-height: 1.45;
-    }
-
-    .badge{
-      padding: 8px 10px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.08);
-      border: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
-      height: fit-content;
-    }
-
-    .grid{
-      display: grid;
-      grid-template-columns: 1.1fr 0.9fr;
-      gap: 14px;
-      align-items: start;
-    }
-
-    @media (max-width: 920px){
-      .grid{ grid-template-columns: 1fr; }
-    }
-
-    .card{
-      background: linear-gradient(180deg, var(--card), rgba(255,255,255,0.04));
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }
-
-    .card .hd{
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-
-    .card .hd .label{
-      font-weight: 600;
-      font-size: 13px;
-      letter-spacing: .2px;
-      color: rgba(255,255,255,0.88);
-    }
-
-    .card .bd{
-      padding: 14px 16px 16px;
-    }
-
-    textarea{
-      width: 100%;
-      min-height: 220px;
-      resize: vertical;
-      padding: 12px 12px;
-      border-radius: 14px;
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(10,16,30,0.55);
-      color: var(--text);
-      outline: none;
-      line-height: 1.4;
-      font-size: 14px;
-    }
-    textarea:focus{
-      border-color: rgba(94,234,212,0.40);
-      box-shadow: 0 0 0 4px rgba(94,234,212,0.10);
-    }
-
-    .hint{
-      margin-top: 10px;
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .btnrow{
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-top: 14px;
-    }
-
-    button{
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(255,255,255,0.08);
-      color: var(--text);
-      border-radius: 14px;
-      padding: 10px 12px;
-      font-weight: 600;
-      font-size: 13px;
-      cursor: pointer;
-      transition: transform .05s ease, background .15s ease, border-color .15s ease, opacity .15s ease;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-    }
-    button:hover{
-      background: rgba(255,255,255,0.11);
-      border-color: rgba(255,255,255,0.26);
-    }
-    button:active{ transform: translateY(1px); }
-    button[disabled]{ opacity: .55; cursor: not-allowed; }
-
-    .primary{
-      background: rgba(94,234,212,0.14);
-      border-color: rgba(94,234,212,0.26);
-    }
-    .primary:hover{
-      background: rgba(94,234,212,0.18);
-      border-color: rgba(94,234,212,0.35);
-    }
-    .danger{
-      background: rgba(244,63,94,0.14);
-      border-color: rgba(244,63,94,0.26);
-    }
-    .danger:hover{
-      background: rgba(244,63,94,0.18);
-      border-color: rgba(244,63,94,0.35);
-    }
-
-    .mini{
-      font-size: 12px;
-      padding: 8px 10px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.12);
-      color: var(--muted);
-      cursor: pointer;
-    }
-    .mini:hover{
-      color: rgba(255,255,255,0.80);
-      border-color: rgba(255,255,255,0.22);
-    }
-
-    .sidebox{
-      display: grid;
-      gap: 12px;
-    }
-
-    .kpi{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-
-    .pill{
-      padding: 12px 12px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.06);
-    }
-
-    .pill .t{
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .pill .v{
-      font-size: 14px;
-      font-weight: 650;
-      letter-spacing: .2px;
-    }
-
-    .mono{
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
-
-    pre{
-      margin: 0;
-      padding: 14px 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(10,16,30,0.55);
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      line-height: 1.45;
-      font-size: 13px;
-      color: rgba(255,255,255,0.88);
-    }
-
-    .empty{
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
-    }
-
-    .footer{
-      margin-top: 14px;
-      color: rgba(255,255,255,0.55);
-      font-size: 12px;
-      line-height: 1.4;
-    }
-
-    .spinner{
-      width: 14px;
-      height: 14px;
-      border-radius: 999px;
-      border: 2px solid rgba(255,255,255,0.30);
-      border-top-color: rgba(255,255,255,0.85);
-      display: inline-block;
-      animation: spin .8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty{color:#6b7280;font-size:13px;line-height:1.4;padding:12px 14px;}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;}
   </style>
 </head>
-
 <body>
-  <div class="wrap">
-    <header>
-      <div class="title">
-        <h1>Cloud Productivity AI Assistant</h1>
-        <p>
-          Paste any text (emails, prompts, notes) to extract tasks, then continuously build a weekly plan.
-          New tasks are added incrementally and the plan is updated with a change log.
-        </p>
-      </div>
-      <div class="badge">GCP · Cloud Run · Vertex AI · Firestore</div>
-    </header>
+  <div class="container">
+    <h1>Cloud Productivity Assistant</h1>
+    <p class="sub">Left: paste text → Extract. Right: readable extracted tasks → Add to weekly plan. Bottom: weekly plan shown by date.</p>
 
     <div class="grid">
-      <!-- Left: Input -->
+      <!-- Left: input -->
       <div class="card">
-        <div class="hd">
-          <div class="label">Input</div>
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="mini" type="button" onclick="fillExample(1)">Fill example A</button>
-            <button class="mini" type="button" onclick="fillExample(2)">Fill example B</button>
-            <button class="mini" type="button" onclick="fillExample(3)">Fill example C</button>
-            <button class="mini" type="button" onclick="clearText()">Clear</button>
+        <p class="title">Input Text</p>
+        <form method="post" action="/ui/action">
+          <textarea name="text" placeholder="Paste email / notes / prompt here...">{{ input_text or "" }}</textarea>
+          <input type="hidden" name="action" value="extract_preview" />
+          <div class="actions">
+            <button class="primary" type="submit">Extract</button>
+            <button type="button" onclick="location.href='/'">Clear</button>
+            <button type="button" onclick="submitViewWeek()">View Weekly Plan</button>
           </div>
-        </div>
-
-        <div class="bd">
-          <form method="post" action="/ui/action" id="mainForm">
-            <textarea name="text" id="textArea" placeholder="Example:
-This week: Project proposal due Friday, midterm next Tuesday.
-Meeting Wed 2–3pm. Need groceries. Add 1 hour to review lecture notes."></textarea>
-
-            <div class="hint">
-              <span>Tips:</span>
-              <span>• You can paste messy text.</span>
-              <span>• Try “Task: … due … (time)” format too.</span>
-              <span>• Use <span class="mono">View Weekly Plan</span> to confirm persistence.</span>
-            </div>
-
-            <input type="hidden" name="action" value="extract" id="actionField"/>
-
-            <div class="btnrow">
-              <button class="primary" type="button" onclick="submitAction('extract')">
-                <span>1) Extract Tasks</span>
-              </button>
-
-              <button type="button" onclick="submitAction('add_to_week')">
-                <span>2) Add to Weekly Plan</span>
-              </button>
-
-              <button type="button" onclick="submitAction('view_week')">
-                <span>3) View Weekly Plan</span>
-              </button>
-
-              <button class="danger" type="button" onclick="submitAction('view_week')">
-                <span>Refresh</span>
-              </button>
-            </div>
-          </form>
-
-          <div class="footer">
-            The assistant stores a versioned weekly plan in Firestore and updates it incrementally when new tasks arrive.
-          </div>
-        </div>
+          <div class="hint">Extract does not modify your plan. Add button on the right saves tasks to Firestore.</div>
+        </form>
       </div>
 
-      <!-- Right: Output -->
-      <div class="sidebox">
-        <div class="card">
-          <div class="hd">
-            <div class="label">Output</div>
-            <div class="badge" id="statusBadge">Ready</div>
-          </div>
-          <div class="bd">
-            {% if result %}
-              <pre class="mono" id="resultBox">{{ result }}</pre>
-            {% else %}
-              <div class="empty">
-                Run <b>Extract Tasks</b> to get structured tasks, then <b>Add to Weekly Plan</b>.
-                Your plan is stored and updated across runs.
-              </div>
-            {% endif %}
-          </div>
-        </div>
+      <!-- Right: extracted -->
+      <div class="card">
+        <p class="title">Extracted Tasks</p>
 
-        <div class="card">
-          <div class="hd">
-            <div class="label">Demo checklist</div>
+        {% if extracted_tasks and extracted_tasks|length > 0 %}
+          <div style="display:grid;gap:10px;">
+            {% for t in extracted_tasks %}
+              <div class="block">
+                <div class="t">{{ t.title or t.task or "Untitled task" }}</div>
+                <div class="m">
+                  {% if t.due %}<b>Due:</b> {{ t.due }} · {% endif %}
+                  {% if t.estimated_minutes %}<b>Est:</b> {{ t.estimated_minutes }} min · {% endif %}
+                  {% if t.priority %}<b>Priority:</b> {{ t.priority }} · {% endif %}
+                  {% if t.category %}<b>Category:</b> {{ t.category }}{% endif %}
+                </div>
+                {% if t.notes %}
+                  <div class="m" style="margin-top:6px;">{{ t.notes }}</div>
+                {% endif %}
+              </div>
+            {% endfor %}
           </div>
-          <div class="bd">
-            <div class="kpi">
-              <div class="pill">
-                <div class="t">Step 1</div>
-                <div class="v">Extract tasks from text</div>
-              </div>
-              <div class="pill">
-                <div class="t">Step 2</div>
-                <div class="v">Add task → plan updates</div>
-              </div>
-              <div class="pill">
-                <div class="t">Step 3</div>
-                <div class="v">View weekly plan (persisted)</div>
-              </div>
-              <div class="pill">
-                <div class="t">Artifacts</div>
-                <div class="v">Firestore + Logs screenshots</div>
-              </div>
+
+          <form method="post" action="/ui/action" style="margin-top:12px;">
+            <input type="hidden" name="action" value="confirm_add" />
+            <input type="hidden" name="pending_tasks_json" value="{{ pending_tasks_json | e }}" />
+            <div class="actions">
+              <button class="warn" type="submit">Add to Weekly Plan</button>
+              <button type="button" onclick="location.href='/'">Discard</button>
             </div>
-          </div>
-        </div>
+            <div class="hint">This updates Firestore + increments plan version.</div>
+          </form>
 
+          <details style="margin-top:12px;">
+            <summary style="cursor:pointer;color:#6b7280;font-weight:800;font-size:13px;">Show raw JSON</summary>
+            <div style="margin-top:10px;">
+              <pre style="min-height:auto;">{{ extracted_pretty }}</pre>
+            </div>
+          </details>
+
+        {% else %}
+          <pre>{
+  "message": "No extracted tasks yet. Paste text and click Extract."
+}</pre>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Weekly plan by date -->
+    <div class="row">
+      <div class="card">
+        <p class="title">Weekly Plan (by date)</p>
+        <div class="hint">Week: <code>{{ week_id or "N/A" }}</code> · Version: <code>{{ week_version or 0 }}</code></div>
+
+        {% if weekly_by_date and weekly_by_date|length > 0 %}
+          <div style="display:grid;gap:12px;margin-top:12px;">
+            {% for d in weekly_by_date %}
+              <div class="day">
+                <div class="day-hd">
+                  <b>{{ d.day }}</b>
+                  <span class="date">{{ d.date }}</span>
+                </div>
+
+                {% if d.blocks and d.blocks|length > 0 %}
+                  <div class="blocks">
+                    {% for b in d.blocks %}
+                      <div class="block">
+                        <div class="t">{{ b.start }}–{{ b.end }} · {{ b.task }}</div>
+                        {% if b.notes %}
+                          <div class="m">{{ b.notes }}</div>
+                        {% endif %}
+                      </div>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <div class="empty">No blocks planned.</div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty" style="margin-top:10px;">
+            No weekly plan yet. Extract tasks and click <b>Add to Weekly Plan</b>.
+          </div>
+        {% endif %}
       </div>
     </div>
   </div>
 
   <script>
-    const form = document.getElementById('mainForm');
-    const actionField = document.getElementById('actionField');
-    const statusBadge = document.getElementById('statusBadge');
-
-    function setLoading(isLoading) {
-      const buttons = form.querySelectorAll('button');
-      buttons.forEach(b => {
-        // keep mini buttons enabled; disable only main action buttons
-        if (!b.classList.contains('mini')) b.disabled = isLoading;
-      });
-      statusBadge.innerHTML = isLoading ? '<span class="spinner"></span> Running' : 'Ready';
+    function submitViewWeek(){
+      const f=document.createElement('form');
+      f.method='post'; f.action='/ui/action';
+      const a=document.createElement('input');
+      a.type='hidden'; a.name='action'; a.value='view_week';
+      f.appendChild(a);
+      document.body.appendChild(f);
+      f.submit();
     }
-
-    function submitAction(action) {
-      actionField.value = action;
-      setLoading(true);
-      form.submit();
-    }
-
-    function clearText() {
-      document.getElementById('textArea').value = '';
-    }
-
-    function fillExample(n) {
-      const ta = document.getElementById('textArea');
-      if (n === 1) {
-        ta.value =
-`This week: Project proposal due Friday.
-Midterm next Tuesday.
-Meeting Wed 2–3pm.
-Need to buy groceries.
-Add 1 hour to review lecture notes.`;
-      } else if (n === 2) {
-        ta.value = `Task: Draft proposal outline (2 hours) due Thursday.`;
-      } else {
-        ta.value =
-`Add task: Prepare midterm cheat sheet.
-Estimated time: 3 hours.
-Deadline: Monday night.`;
-      }
-    }
-
-    // If page reloads with result, show Ready status quickly
-    window.addEventListener('load', () => setLoading(false));
   </script>
 </body>
 </html>
