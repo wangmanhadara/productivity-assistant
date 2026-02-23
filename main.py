@@ -1,296 +1,428 @@
-import os, json, datetime
-from typing import Dict, Any, List, Optional
+import os
+import json
+import datetime
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from google.cloud import firestore
+
 import vertexai
 from vertexai.generative_models import GenerativeModel
 
+from zoneinfo import ZoneInfo
+
+
 # ---- Config ----
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
-REGION = os.environ.get("GCP_REGION", "us-central1")
-TIMEZONE = "America/New_York"
-DEFAULT_USER_ID = "default"
+REGION = os.environ.get("GCP_REGION", "us-central1")  # Vertex AI region
+TIMEZONE = os.environ.get("TIMEZONE", "America/New_York")
+DEFAULT_USER_ID = os.environ.get("DEFAULT_USER_ID", "default")
+
+# Firestore multi-database: you said your DB id is productivitydatabase
+FIRESTORE_DB = os.environ.get("FIRESTORE_DB", "productivitydatabase")
+
+MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.0-flash-lite")
+
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-db = firestore.Client(database="productivitydatabase")
+db = firestore.Client(database=FIRESTORE_DB)
+
 
 # ---- Helpers ----
 def now_utc_iso() -> str:
-    return datetime.datetime.utcnow().isoformat() + "Z"
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def today_local_date() -> datetime.date:
+    return datetime.datetime.now(ZoneInfo(TIMEZONE)).date()
+
 
 def current_week_id() -> str:
     # ISO week, e.g., 2026-W08
-    today = datetime.date.today()
-    iso_year, iso_week, _ = today.isocalendar()
+    d = today_local_date()
+    iso_year, iso_week, _ = d.isocalendar()
     return f"{iso_year}-W{iso_week:02d}"
 
-def safe_parse_json(text: str) -> dict:
-    text = text.strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        text = text[start:end+1]
-    return json.loads(text)
 
-def call_gemini_json(prompt: str) -> dict:
+def safe_parse_json(text: str) -> Dict[str, Any]:
+    """
+    Gemini sometimes returns extra text around JSON.
+    This tries to extract the first {...} block.
+    """
+    if not text:
+        return {"error": "Empty model response"}
+
+    t = text.strip()
+
+    # Remove ```json fences if present
+    if t.startswith("```"):
+        t = t.strip("`")
+        t = t.replace("json", "", 1).strip()
+
+    start = t.find("{")
+    end = t.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        t = t[start : end + 1]
+
+    try:
+        return json.loads(t)
+    except Exception:
+        return {"error": "Model did not return valid JSON", "raw": text}
+
+
+def call_gemini_json(prompt: str) -> Dict[str, Any]:
     vertexai.init(project=PROJECT_ID, location=REGION)
-    model = GenerativeModel("gemini-2.0-flash-lite")
+    model = GenerativeModel(MODEL_NAME)
     resp = model.generate_content(prompt)
     return safe_parse_json(resp.text)
 
-def build_extract_prompt(user_text: str) -> str:
-    return f"""
-You are a task extraction assistant.
-Extract actionable tasks from the user's text.
 
-Return STRICT JSON only (no markdown), schema:
-{{
-  "tasks": [
-    {{
-      "title": "...",
-      "due_date": "YYYY-MM-DD or null",
-      "estimated_minutes": number or null,
-      "priority": "low|medium|high",
-      "notes": "..."
-    }}
-  ],
-  "questions": ["..."]
-}}
+# ---- Firestore helpers ----
+WEEKLY_PLANS_COL = "weekly_plans"
+EVENTS_COL = "events_log"
 
-Rules:
-- Only include actionable tasks (things the user needs to do).
-- If no due date is mentioned, use null (do NOT invent dates).
-- If estimated time is not stated, set null.
-- Priority: high if deadline soon or clearly important, else medium/low.
-- Include 0-3 clarifying questions if needed.
-- If the user text is already a single task, output it as one task.
 
-User text:
-{user_text}
-""".strip()
-
-def build_update_week_prompt(existing_plan: List[dict], all_tasks: List[dict], new_tasks: List[dict]) -> str:
-    # existing_plan: weekly_plan array
-    # all_tasks: cumulative tasks stored for the week
-    # new_tasks: tasks just added this time
-    return f"""
-You are a weekly scheduling assistant that updates an existing plan.
-
-Return STRICT JSON only (no markdown), schema:
-{{
-  "weekly_plan": [
-    {{
-      "day": "Monday",
-      "blocks": [
-        {{"start":"09:00","end":"10:00","task":"...","notes":"..."}}
-      ]
-    }}
-  ],
-  "changes": ["..."],
-  "conflicts": ["..."]
-}}
-
-Rules:
-- Minimize changes to existing blocks unless necessary.
-- Insert new tasks into open slots when possible.
-- If a task has a deadline, schedule it before the due date.
-- If due_date is null, schedule it in reasonable open time.
-- Use realistic blocks (30–120 minutes).
-- If conflicts exist (overlapping/too many tasks), list them in conflicts and suggest what to move.
-
-Existing weekly_plan (may be empty):
-{json.dumps(existing_plan, ensure_ascii=False)}
-
-All tasks for this week:
-{json.dumps(all_tasks, ensure_ascii=False)}
-
-New tasks being added now:
-{json.dumps(new_tasks, ensure_ascii=False)}
-
-Timezone: {TIMEZONE}
-""".strip()
-
-# ---- Firestore operations ----
 def week_doc_ref(user_id: str, week_id: str):
-    doc_id = f"{user_id}_{week_id}"
-    return db.collection("weekly_plans").document(doc_id)
+    return db.collection(WEEKLY_PLANS_COL).document(f"{user_id}__{week_id}")
+
 
 def get_or_init_week(user_id: str) -> Dict[str, Any]:
     week_id = current_week_id()
     ref = week_doc_ref(user_id, week_id)
     snap = ref.get()
+
     if snap.exists:
-        return snap.to_dict()
-    # init empty
-    doc = {
+        data = snap.to_dict() or {}
+        # Ensure required fields exist
+        data.setdefault("user_id", user_id)
+        data.setdefault("week_id", week_id)
+        data.setdefault("version", 0)
+        data.setdefault("tasks", [])
+        data.setdefault("weekly_plan", [])
+        return data
+
+    # Initialize a new week doc
+    data = {
         "user_id": user_id,
         "week_id": week_id,
-        "timezone": TIMEZONE,
+        "version": 0,
         "tasks": [],
         "weekly_plan": [],
-        "version": 0,
-        "updated_at": now_utc_iso(),
         "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
     }
-    ref.set(doc)
-    return doc
+    ref.set(data)
+    return data
 
-def save_week(user_id: str, week_doc: Dict[str, Any]):
-    week_id = week_doc["week_id"]
-    ref = week_doc_ref(user_id, week_id)
+
+def save_week(user_id: str, week_doc: Dict[str, Any]) -> None:
+    ref = week_doc_ref(user_id, week_doc["week_id"])
     ref.set(week_doc)
 
-def log_event(event: Dict[str, Any]):
-    db.collection("events_log").add(event)
 
-# ---- API endpoints ----
+def log_event(payload: Dict[str, Any]) -> None:
+    payload.setdefault("created_at", now_utc_iso())
+    db.collection(EVENTS_COL).add(payload)
+
+
+# ---- Weekly plan display: add actual dates ----
+def weekly_plan_to_by_date(week_id: str, weekly_plan: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Convert weekly_plan:
+      [{"day":"Monday","blocks":[{"start":"09:00","end":"10:00","task":"..."}]}]
+    into:
+      [{"day":"Monday","date":"YYYY-MM-DD","blocks":[...]}]
+    Always includes Monday..Sunday, even if empty.
+    """
+    if not week_id or "-W" not in week_id:
+        return []
+
+    year_str, week_str = week_id.split("-W")
+    iso_year = int(year_str)
+    iso_week = int(week_str)
+
+    # Monday of ISO week
+    week_start = datetime.date.fromisocalendar(iso_year, iso_week, 1)
+
+    day_to_offset = {
+        "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
+        "Friday": 4, "Saturday": 5, "Sunday": 6
+    }
+
+    normalized = {}
+    for item in weekly_plan or []:
+        day = item.get("day")
+        if day in day_to_offset:
+            normalized[day] = item.get("blocks", []) or []
+
+    out = []
+    for day, offset in day_to_offset.items():
+        d = week_start + datetime.timedelta(days=offset)
+        out.append({
+            "day": day,
+            "date": d.isoformat(),
+            "blocks": normalized.get(day, []),
+        })
+
+    return out
+
+
+# ---- Prompt builders ----
+def build_extract_prompt(text: str) -> str:
+    return f"""
+You are a task extraction assistant.
+
+Extract actionable tasks from the user's text. Output ONLY valid JSON with this schema:
+{{
+  "tasks": [
+    {{
+      "title": "string",
+      "due": "string (optional, e.g., 2026-02-23 or 'Friday' or 'tomorrow')",
+      "estimated_minutes": number (optional),
+      "priority": "low|medium|high (optional)",
+      "category": "string (optional)",
+      "notes": "string (optional)"
+    }}
+  ]
+}}
+
+Rules:
+- Keep titles short and actionable.
+- If user did not provide due date/time, omit "due".
+- If you are unsure, omit the field.
+- Do not include any extra keys outside this schema.
+
+User text:
+{text}
+""".strip()
+
+
+def build_update_week_prompt(existing_weekly_plan: List[Dict[str, Any]],
+                             all_tasks: List[Dict[str, Any]],
+                             new_tasks: List[Dict[str, Any]]) -> str:
+    return f"""
+You are a weekly planning assistant.
+
+You will update a weekly schedule (Monday-Sunday) based on tasks. Output ONLY valid JSON with this schema:
+{{
+  "weekly_plan": [
+    {{
+      "day": "Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday",
+      "blocks": [
+        {{
+          "start": "HH:MM",
+          "end": "HH:MM",
+          "task": "string",
+          "notes": "string (optional)"
+        }}
+      ]
+    }}
+  ],
+  "changes": ["string"],
+  "conflicts": ["string"]
+}}
+
+Constraints:
+- Keep a realistic schedule (avoid 00:00-06:00).
+- Prefer 30-120 min blocks.
+- Do NOT delete existing blocks unless necessary; adjust carefully.
+- Add new tasks into open times; if cannot fit, put in conflicts.
+
+Existing weekly plan JSON:
+{json.dumps(existing_weekly_plan, ensure_ascii=False)}
+
+All tasks (existing + new) JSON:
+{json.dumps(all_tasks, ensure_ascii=False)}
+
+New tasks to add (most important):
+{json.dumps(new_tasks, ensure_ascii=False)}
+""".strip()
+
+
+# ---- Routes ----
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "time": now_utc_iso()}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "result": None})
+    # show current week even on first load
+    week_doc = get_or_init_week(DEFAULT_USER_ID)
+    week_id = week_doc.get("week_id")
+    week_version = week_doc.get("version", 0)
+    weekly_by_date = weekly_plan_to_by_date(week_id, week_doc.get("weekly_plan", []))
 
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "input_text": "",
+            "extracted_pretty": None,
+            "extracted_tasks": [],
+            "pending_tasks_json": None,
+            "week_id": week_id,
+            "week_version": week_version,
+            "weekly_by_date": weekly_by_date,
+        }
+    )
+
+
+@app.post("/ui/action", response_class=HTMLResponse)
+def ui_action(
+    request: Request,
+    text: str = Form(""),
+    action: str = Form("extract_preview"),
+    pending_tasks_json: str = Form("")
+):
+    input_text = (text or "").strip()
+
+    extracted_pretty: Optional[str] = None
+    extracted_tasks: List[Dict[str, Any]] = []
+    pending_tasks_json_out: Optional[str] = None
+
+    # always load current week for display
+    week_doc = get_or_init_week(DEFAULT_USER_ID)
+    week_id = week_doc.get("week_id")
+    week_version = week_doc.get("version", 0)
+    weekly_by_date = weekly_plan_to_by_date(week_id, week_doc.get("weekly_plan", []))
+
+    try:
+        if action == "extract_preview":
+            if not input_text:
+                extracted_pretty = json.dumps({"error": "Please paste text first."}, indent=2, ensure_ascii=False)
+            else:
+                extracted = call_gemini_json(build_extract_prompt(input_text))
+                extracted_tasks = extracted.get("tasks", []) or []
+                pending = {"tasks": extracted_tasks}
+                pending_tasks_json_out = json.dumps(pending, ensure_ascii=False)
+                extracted_pretty = json.dumps(extracted, indent=2, ensure_ascii=False)
+
+        elif action == "confirm_add":
+            if not pending_tasks_json:
+                extracted_pretty = json.dumps({"error": "No extracted tasks to add. Please Extract first."}, indent=2, ensure_ascii=False)
+            else:
+                pending = json.loads(pending_tasks_json)
+                new_tasks = pending.get("tasks", [])
+                if not isinstance(new_tasks, list) or len(new_tasks) == 0:
+                    extracted_pretty = json.dumps({"error": "Extracted task list is empty."}, indent=2, ensure_ascii=False)
+                else:
+                    existing_plan = week_doc.get("weekly_plan", [])
+                    tasks_updated = (week_doc.get("tasks", []) or []) + new_tasks
+
+                    updated = call_gemini_json(build_update_week_prompt(existing_plan, tasks_updated, new_tasks))
+
+                    week_doc["tasks"] = tasks_updated
+                    week_doc["weekly_plan"] = updated.get("weekly_plan", [])
+                    week_doc["version"] = int(week_doc.get("version", 0)) + 1
+                    week_doc["updated_at"] = now_utc_iso()
+                    save_week(DEFAULT_USER_ID, week_doc)
+
+                    log_event({
+                        "type": "ui_add_to_week",
+                        "user_id": DEFAULT_USER_ID,
+                        "week_id": week_doc["week_id"],
+                        "new_tasks": new_tasks,
+                        "changes": updated.get("changes", []),
+                        "conflicts": updated.get("conflicts", []),
+                    })
+
+                    # refresh plan display after update
+                    week_id = week_doc.get("week_id")
+                    week_version = week_doc.get("version", 0)
+                    weekly_by_date = weekly_plan_to_by_date(week_id, week_doc.get("weekly_plan", []))
+
+                    extracted_pretty = json.dumps({
+                        "message": "Tasks added to weekly plan.",
+                        "week_id": week_id,
+                        "version": week_version,
+                        "changes": updated.get("changes", []),
+                        "conflicts": updated.get("conflicts", []),
+                    }, indent=2, ensure_ascii=False)
+
+        elif action == "view_week":
+            week_doc = get_or_init_week(DEFAULT_USER_ID)
+            week_id = week_doc.get("week_id")
+            week_version = week_doc.get("version", 0)
+            weekly_by_date = weekly_plan_to_by_date(week_id, week_doc.get("weekly_plan", []))
+            extracted_pretty = json.dumps(week_doc, indent=2, ensure_ascii=False)
+
+        else:
+            extracted_pretty = json.dumps({"error": f"Unknown action: {action}"}, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        extracted_pretty = json.dumps({"error": str(e)}, indent=2, ensure_ascii=False)
+
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "input_text": input_text,
+            "extracted_pretty": extracted_pretty,
+            "extracted_tasks": extracted_tasks,
+            "pending_tasks_json": pending_tasks_json_out,  # only set after extract
+            "week_id": week_id,
+            "week_version": week_version,
+            "weekly_by_date": weekly_by_date,
+        }
+    )
+
+
+# ---- Optional API endpoints (useful for demo/report) ----
 @app.post("/api/extract")
 def api_extract(payload: Dict[str, Any]):
-    user_text = (payload.get("text") or "").strip()
-    if not user_text:
-        return JSONResponse({"error": "text is required"}, status_code=400)
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "Missing text"}, status_code=400)
+    extracted = call_gemini_json(build_extract_prompt(text))
+    return extracted
 
-    result = call_gemini_json(build_extract_prompt(user_text))
-    log_event({
-        "type": "extract",
-        "user_id": payload.get("user_id", DEFAULT_USER_ID),
-        "week_id": current_week_id(),
-        "user_input": user_text,
-        "ai_output": result,
-        "created_at": now_utc_iso(),
-    })
-    return result
 
 @app.get("/api/weekly/get")
-def api_weekly_get(user_id: str = DEFAULT_USER_ID):
-    week_doc = get_or_init_week(user_id)
+def api_weekly_get():
+    week_doc = get_or_init_week(DEFAULT_USER_ID)
     return week_doc
+
 
 @app.post("/api/weekly/add_text")
 def api_weekly_add_text(payload: Dict[str, Any]):
-    user_id = payload.get("user_id", DEFAULT_USER_ID)
     text = (payload.get("text") or "").strip()
     if not text:
-        return JSONResponse({"error": "text is required"}, status_code=400)
+        return JSONResponse({"error": "Missing text"}, status_code=400)
 
-    # 1) extract tasks from text
     extracted = call_gemini_json(build_extract_prompt(text))
-    new_tasks = extracted.get("tasks", [])
-    if not isinstance(new_tasks, list) or len(new_tasks) == 0:
-        return JSONResponse({"error": "no tasks extracted"}, status_code=400)
+    new_tasks = extracted.get("tasks", []) or []
 
-    # 2) load existing week
-    week_doc = get_or_init_week(user_id)
+    week_doc = get_or_init_week(DEFAULT_USER_ID)
     existing_plan = week_doc.get("weekly_plan", [])
-    tasks = week_doc.get("tasks", [])
+    tasks_updated = (week_doc.get("tasks", []) or []) + new_tasks
 
-    # 3) append new tasks (simple append; could dedupe, but keep simple for 3-day project)
-    tasks_updated = tasks + new_tasks
-
-    # 4) ask Gemini to update weekly plan incrementally
     updated = call_gemini_json(build_update_week_prompt(existing_plan, tasks_updated, new_tasks))
 
-    # 5) persist
     week_doc["tasks"] = tasks_updated
     week_doc["weekly_plan"] = updated.get("weekly_plan", [])
     week_doc["version"] = int(week_doc.get("version", 0)) + 1
     week_doc["updated_at"] = now_utc_iso()
+    save_week(DEFAULT_USER_ID, week_doc)
 
-    save_week(user_id, week_doc)
-
-    # 6) log event
     log_event({
-        "type": "add_text",
-        "user_id": user_id,
+        "type": "api_add_text",
+        "user_id": DEFAULT_USER_ID,
         "week_id": week_doc["week_id"],
         "new_tasks": new_tasks,
         "changes": updated.get("changes", []),
         "conflicts": updated.get("conflicts", []),
-        "created_at": now_utc_iso(),
     })
 
     return {
+        "message": "Added tasks and updated weekly plan.",
         "week_id": week_doc["week_id"],
         "version": week_doc["version"],
-        "new_tasks": new_tasks,
         "changes": updated.get("changes", []),
         "conflicts": updated.get("conflicts", []),
-        "weekly_plan": week_doc["weekly_plan"],
+        "weekly_plan": week_doc.get("weekly_plan", []),
     }
-
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-# ---- Simple UI handler (posts back to same page) ----
-@app.post("/ui/action", response_class=HTMLResponse)
-def ui_action(request: Request, text: str = Form(""), action: str = Form("extract")):
-    text = (text or "").strip()
-
-    try:
-        if action == "extract":
-            if not text:
-                result = {"error": "Please paste text first."}
-            else:
-                result = call_gemini_json(build_extract_prompt(text))
-
-        elif action == "add_to_week":
-            if not text:
-                result = {"error": "Please paste text first."}
-            else:
-                # reuse the API logic inline for UI
-                extracted = call_gemini_json(build_extract_prompt(text))
-                new_tasks = extracted.get("tasks", [])
-
-                week_doc = get_or_init_week(DEFAULT_USER_ID)
-                existing_plan = week_doc.get("weekly_plan", [])
-                tasks_updated = week_doc.get("tasks", []) + new_tasks
-
-                updated = call_gemini_json(build_update_week_prompt(existing_plan, tasks_updated, new_tasks))
-
-                week_doc["tasks"] = tasks_updated
-                week_doc["weekly_plan"] = updated.get("weekly_plan", [])
-                week_doc["version"] = int(week_doc.get("version", 0)) + 1
-                week_doc["updated_at"] = now_utc_iso()
-                save_week(DEFAULT_USER_ID, week_doc)
-
-                log_event({
-                    "type": "ui_add_to_week",
-                    "user_id": DEFAULT_USER_ID,
-                    "week_id": week_doc["week_id"],
-                    "new_tasks": new_tasks,
-                    "changes": updated.get("changes", []),
-                    "conflicts": updated.get("conflicts", []),
-                    "created_at": now_utc_iso(),
-                })
-
-                result = {
-                    "week_id": week_doc["week_id"],
-                    "version": week_doc["version"],
-                    "new_tasks": new_tasks,
-                    "changes": updated.get("changes", []),
-                    "conflicts": updated.get("conflicts", []),
-                    "weekly_plan": week_doc["weekly_plan"],
-                }
-
-        elif action == "view_week":
-            week_doc = get_or_init_week(DEFAULT_USER_ID)
-            result = week_doc
-
-        else:
-            result = {"error": f"Unknown action: {action}"}
-
-    except Exception as e:
-        result = {"error": str(e)}
-
-    pretty = json.dumps(result, indent=2, ensure_ascii=False)
-    return templates.TemplateResponse("index.html", {"request": request, "result": pretty})
